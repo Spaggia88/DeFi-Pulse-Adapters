@@ -1,77 +1,219 @@
 /*==================================================
-  Modules
+  Imports
 ==================================================*/
 const sdk = require('../../sdk');
-const _ = require('underscore');
 const BigNumber = require('bignumber.js');
-const compoundProviderABI = require('./abis/compound.json');
+const axios = require('axios');
 
 /*==================================================
   Settings
 ==================================================*/
-const USDC_ADDRESS = '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48';
+const SY_POOLS_API_URL = 'https://api-v2.barnbridge.com/api/smartyield/pools';
+const SA_POOLS_API_URL = 'https://api-v2.barnbridge.com/api/smartalpha/pools';
 
-const listedTokens = [
-  // compound
-  {
-    address: USDC_ADDRESS,
-    decimals: 6,
-    async getBalanceCall(block) {
-      const {output} = await sdk.api.abi.call({
-        abi: compoundProviderABI['balance'],
-        target: '0xDAA037F99d168b552c0c61B7Fb64cF7819D78310',
-        block,
-      });
-
-      return new BigNumber(output).dividedBy(1e8);
-    },
-    async getExchangeRateCall(block) {
-      const {output} = await sdk.api.abi.call({
-        abi: compoundProviderABI['exchangeRate'],
-        target: '0x39aa39c021dfbae8fac545936693ac917d5e7563',
-        block,
-      });
-
-      return new BigNumber(output).dividedBy(1e16);
-    },
-  }
-];
+const STK_AAVE_ADDRESS = '0x4da27a545c0c5b758a6ba100e3a049001de870f5';
+const AAVE_ADDRESS = '0x7fc66500c84a76ad7e9c93437bfc5ac33e2ddae9';
 
 /*==================================================
-  Main
+  API
 ==================================================*/
-async function tvl(timestamp, block) {
-  const balances = {};
-
-  await Promise.all(_.map(listedTokens, async token => {
-    if (!balances[token.address]) {
-      balances[token.address] = new BigNumber(0);
-    }
-
-    try {
-      const balance = await token.getBalanceCall(block);
-      const exchangeRate = await token.getExchangeRateCall(block);
-      const totalValue = balance.multipliedBy(exchangeRate).multipliedBy(10 ** token.decimals);
-
-      balances[token.address] = balances[token.address].plus(totalValue);
-    } catch {
-    }
-  }));
-
-  Object.keys(balances)
-    .forEach(address => {
-      balances[address] = balances[address].integerValue(BigNumber.ROUND_UP);
-    });
-
-  return balances;
+async function fetchSyPools(apiUrl) {
+    return axios.get(apiUrl)
+        .then(res => res.data)
+        .then(({status, data}) => status === 200 ? data : []);
 }
 
-/* Metadata */
+async function fetchSaPools(apiUrl) {
+    return axios.get(apiUrl)
+        .then(res => res.data)
+        .then(({status, data}) => status === 200 ? data : []);
+}
+
+/*==================================================
+  Contract
+==================================================*/
+function syGetUnderlyingTotal(chain, smartYieldAddress, block) {
+    return sdk.api.abi.call({
+        abi: {
+            name: "underlyingTotal",
+            type: "function",
+            stateMutability: "view",
+            constant: true,
+            payable: false,
+            inputs: [],
+            outputs: [
+                {
+                    name: "total",
+                    type: "uint256",
+                    internalType: "uint256",
+                },
+            ],
+        },
+        target: smartYieldAddress,
+        chain,
+        block,
+    }).then(({output}) => new BigNumber(output));
+}
+
+function saGetEpochBalance(chain, smartAlphaAddress, block) {
+    return sdk.api.abi.call({
+        abi: {
+            name: "epochBalance",
+            type: "function",
+            stateMutability: "view",
+            constant: true,
+            payable: false,
+            inputs: [],
+            outputs: [
+                {
+                    name: "balance",
+                    type: "uint256",
+                    internalType: "uint256",
+                },
+            ],
+        },
+        target: smartAlphaAddress,
+        chain,
+        block,
+    }).then(({output}) => new BigNumber(output));
+}
+
+function saGetQueuedJuniorsUnderlyingIn(chain, smartAlphaAddress, block) {
+    return sdk.api.abi.call({
+        abi: {
+            name: "queuedJuniorsUnderlyingIn",
+            type: "function",
+            stateMutability: "view",
+            constant: true,
+            payable: false,
+            inputs: [],
+            outputs: [
+                {
+                    name: "amount",
+                    type: "uint256",
+                    internalType: "uint256",
+                },
+            ],
+        },
+        target: smartAlphaAddress,
+        chain,
+        block,
+    }).then(({output}) => new BigNumber(output));
+}
+
+function saGetQueuedSeniorsUnderlyingIn(chain, smartAlphaAddress, block) {
+    return sdk.api.abi.call({
+        abi: {
+            name: "queuedSeniorsUnderlyingIn",
+            type: "function",
+            stateMutability: "view",
+            constant: true,
+            payable: false,
+            inputs: [],
+            outputs: [
+                {
+                    name: "amount",
+                    type: "uint256",
+                    internalType: "uint256",
+                },
+            ],
+        },
+        target: smartAlphaAddress,
+        chain,
+        block,
+    }).then(({output}) => new BigNumber(output));
+}
+
+/*==================================================
+  Helpers
+==================================================*/
+class TokensBalance {
+    constructor() {
+        this._balances = {};
+      }
+
+    get balances() {
+        return Object.assign({}, this._balances);
+    }
+
+
+
+    addTokenToBalance(address, amount) {
+        const key = this.resolveAddress(address);
+
+        if (!this._balances[key]) {
+            this._balances[key] = new BigNumber(0);
+        }
+
+        this._balances[key] = this._balances[key].plus(amount);
+    }
+
+    resolveAddress(address) {
+        switch (address) {
+            case STK_AAVE_ADDRESS:
+                return AAVE_ADDRESS;
+            default:
+                return address;
+        }
+    }
+}
+
+/*==================================================
+  TVL
+==================================================*/
+async function tvl(timestamp, ethBlock) {
+    const chain = '';
+    const block = ethBlock;
+    const tb = new TokensBalance();
+
+    // calculate TVL from SmartYield pools
+    const syPools = await fetchSyPools(SY_POOLS_API_URL);
+
+    try {
+        await Promise.all(syPools.map(async syPool => {
+            const {smartYieldAddress, underlyingAddress} = syPool;
+            const underlyingTotal = await syGetUnderlyingTotal(chain, smartYieldAddress, block);
+            tb.addTokenToBalance(underlyingAddress, underlyingTotal);
+        }));
+    } catch (e) {
+        console.log(e)
+    }
+
+
+    // calculate TVL from SmartAlpha pools
+    const saPools = await fetchSaPools(SA_POOLS_API_URL);
+
+    try {
+        await Promise.all(saPools.map(async saPool => {
+            const {poolAddress, poolToken} = saPool;
+            const [epochBalance, queuedJuniorsUnderlyingIn, queuedSeniorsUnderlyingIn] = await Promise.all([
+                saGetEpochBalance(chain, poolAddress, block),
+                saGetQueuedJuniorsUnderlyingIn(chain, poolAddress, block),
+                saGetQueuedSeniorsUnderlyingIn(chain, poolAddress, block),
+            ]);
+    
+            const underlyingTotal = epochBalance
+                .plus(queuedJuniorsUnderlyingIn)
+                .plus(queuedSeniorsUnderlyingIn);
+            tb.addTokenToBalance(poolToken.address, underlyingTotal);
+        }));
+    } catch (e) {
+        console.log(e)
+    }
+
+
+    return tb.balances;
+}
+
+/*==================================================
+  Metadata
+==================================================*/
 module.exports = {
-  name: 'BarnBridge',
-  website: 'https://app.barnbridge.com',
-  symbol: 'BOND',
-  category: 'derivatives',
-  start: 1615564559, // Mar-24-2021 02:17:40 PM +UTC
-  tvl,
+    name: 'BarnBridge',
+    website: 'https://app.barnbridge.com',
+    token: 'BOND',
+    category: 'Derivatives',
+    chain: 'ethereum',
+    start: 1615664559, // Mar-24-2021 02:17:40 PM +UTC,
+    tvl,
 };

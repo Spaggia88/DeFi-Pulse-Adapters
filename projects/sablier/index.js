@@ -1,58 +1,58 @@
 /*==================================================
   Modules
   ==================================================*/
-  
-  const _ = require('underscore')
-  const axios = require("axios");
-  const sdk = require('../../sdk');
+
+const _ = require('underscore')
+const axios = require("axios");
+const sdk = require('../../sdk');
 
 /*==================================================
   Settings
   ==================================================*/
 
-  const sablier = '0xA4fc358455Febe425536fd1878bE67FfDBDEC59a';
+const sablier = '0xA4fc358455Febe425536fd1878bE67FfDBDEC59a';
 /*==================================================
   TVL
   ==================================================*/
 
 async function tvl(timestamp, block) {
-    const result = await axios({
-        url: "https://api.thegraph.com/subgraphs/name/sablierhq/sablier",
-        method: "post",
-        data: {
-            query: `
+  const result = await axios({
+    url: "https://api.thegraph.com/subgraphs/name/sablierhq/sablier",
+    method: "post",
+    data: {
+      query: `
             query AllTokens {
                 tokens {
                 id
                 }
             }
             `
-        }
-        });
-    let allTokens = result.data.data.tokens;
-    allTokens = allTokens.map(token => token.id );
+    }
+  });
+  let allTokens = result.data.data.tokens;
+  allTokens = allTokens.map(token => token.id );
 
-    const balances = {
-        '0x0000000000000000000000000000000000000000': 0
-    };
+  const balances = {
+    '0x0000000000000000000000000000000000000000': 0
+  };
 
-    const calls = [];
-    _.each(allTokens, (token) => {
-        calls.push({
-        target: token,
-        params: sablier
-        });
+  const calls = [];
+  _.each(allTokens, (token) => {
+    calls.push({
+      target: token,
+      params: sablier
     });
+  });
 
-    const balanceOfResults = await sdk.api.abi.multiCall({
-        block,
-        calls,
-        abi: 'erc20:balanceOf',
-    });
+  const balanceOfResults = await sdk.api.abi.multiCall({
+    block,
+    calls,
+    abi: 'erc20:balanceOf',
+  });
 
-    await sdk.util.sumMultiBalanceOf(balances, balanceOfResults);
+  await sdk.util.sumMultiBalanceOf(balances, balanceOfResults);
 
-    return balances;
+  return balances;
 }
 
 /*==================================================
